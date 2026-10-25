@@ -11,6 +11,7 @@ import time
 import tkinter as tk
 from collections import OrderedDict
 from dataclasses import asdict
+from fractions import Fraction
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -19,6 +20,7 @@ from pet_core import (
     approach_angle,
     choose_target,
     forward_crawl_step,
+    gait_pose,
     movement_step,
     settings_path,
 )
@@ -32,6 +34,7 @@ except ImportError:  # pragma: no cover - Windows-only integration
 KEY_COLOR = "#010203"
 PET_W, PET_H = 192, 192
 DIRECTION_COUNT = 32
+WALK_FRAMES = 8
 STRIDE_DISTANCE = 72.0
 FRAME_INTERVAL_MS = 16
 MAX_CACHED_SPRITES = 96
@@ -43,7 +46,7 @@ def load_settings() -> PetSettings:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         settings = PetSettings.from_dict(data)
-        settings.scale = round(settings.scale * 10) / 10
+        settings.scale = round(settings.scale * 4) / 4
         return settings
     except (OSError, ValueError, TypeError):
         return PetSettings()
@@ -227,7 +230,7 @@ class CockroachPet:
 
         def apply() -> None:
             old_startup = self.settings.start_with_windows
-            selected_scale = round(float(size.get()) * 10) / 10
+            selected_scale = round(float(size.get()) * 4) / 4
             self.settings = PetSettings(speed=float(speed.get()), scale=selected_scale, start_with_windows=startup.get())
             try:
                 if old_startup != self.settings.start_with_windows:
@@ -249,24 +252,23 @@ class CockroachPet:
     def _draw(self) -> None:
         c = self.canvas
         s = self.settings.scale
-        scale_step = min(20, max(7, round(s * 10)))
-        # The reference is a side view, so show it facing the travel direction
-        # and avoid fake perspective rotations that alter the cockroach.
-        facing = "left" if 8 < self.direction < 24 else "right"
-        key = (0 if facing == "right" else 1, scale_step, 0)
+        scale_step = min(8, max(3, round(s * 4)))
+        pose = gait_pose(self.gait_distance, WALK_FRAMES, STRIDE_DISTANCE) if self.moving or self.turning else 0
+        key = (self.direction, pose, scale_step)
         sprite = self.sprite_cache.get(key)
         if sprite is None:
-            sprite_path = self.asset_dir / f"roach_photo_{facing}_scale_{scale_step}.png"
-            sprite = tk.PhotoImage(file=str(sprite_path))
+            sprite_path = self.asset_dir / f"roach_walk_{pose}_dir_{self.direction}.png"
+            source = tk.PhotoImage(file=str(sprite_path))
+            ratio = Fraction(scale_step, 8)
+            sprite = source.zoom(ratio.numerator, ratio.numerator).subsample(
+                ratio.denominator, ratio.denominator
+            )
             self.sprite_cache[key] = sprite
             if len(self.sprite_cache) > MAX_CACHED_SPRITES:
                 self.sprite_cache.popitem(last=False)
         else:
             self.sprite_cache.move_to_end(key)
-        bob = (
-            math.sin(self.gait_distance * (2 * math.pi / STRIDE_DISTANCE)) * 1.7
-            if self.moving or self.turning else math.sin(self.frame * 0.04) * 0.55
-        )
+        bob = math.sin(self.gait_distance * (2 * math.pi / STRIDE_DISTANCE)) * 1.2 if self.moving else 0
         position = (int(PET_W*s)/2, int(PET_H*s)/2 + bob)
         if self.sprite_item is None:
             self.sprite_item = c.create_image(*position, image=sprite)
