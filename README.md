@@ -26,10 +26,10 @@ The build creates a portable app folder and a ZIP file. Share `dist\LittleRoach-
 ## Behavior and limitations
 
 - The pet is a frameless, color-key transparent Tk window marked always-on-top. It uses Windows virtual-screen bounds, including monitors positioned left of or above the primary display.
-- It wanders in short bursts with natural pauses and occasional quick dashes, facing the direction it moves. Double-click or **Startle** triggers a longer sprint; it can be paused or repositioned by dragging.
-- Right-click opens pet actions and settings. Speed, size, and startup preference persist locally.
+- It wanders in short bursts with natural pauses and occasional quick dashes, facing the direction it moves. Eight alternating leg poses cycle in step with travel distance, and 16 heading angles let it turn along diagonal and vertical paths. Double-click or **Startle** triggers a longer sprint; it can be paused or repositioned by dragging.
+- Right-click opens pet actions and settings. Speed, size, and startup preference persist locally. The default size is compact, and the crawl poses advance according to distance traveled so the legs stay in step with body movement.
 - It has no model/API dependency and does not access the network. `local_ai.py` defines a tiny optional assistant interface; a later local adapter can connect to a model installed on the user's machine. No model is bundled in this initial version.
-- Some exclusive full-screen games may hide ordinary desktop-topmost windows. Transparency relies on Windows' Tk color-key support, and behavior can vary with unusual desktop compositors.
+- Some exclusive full-screen games may hide ordinary desktop-topmost windows. Transparency relies on Windows' Tk color-key support. The animation uses a crisp alpha silhouette because Tk color-key windows cannot blend soft alpha edges; some jaggedness may be visible at larger sizes. Behavior can vary with unusual desktop compositors.
 
 ## Verify
 

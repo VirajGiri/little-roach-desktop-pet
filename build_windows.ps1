@@ -10,7 +10,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $archive = Join-Path (Get-Location) "dist\LittleRoach-portable.zip"
+$tempArchive = Join-Path (Get-Location) "dist\LittleRoach-portable.tmp.zip"
+if (Test-Path $tempArchive) { Remove-Item -LiteralPath $tempArchive -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    (Join-Path (Get-Location) "dist\LittleRoach"),
+    $tempArchive,
+    [System.IO.Compression.CompressionLevel]::Optimal,
+    $true
+)
 if (Test-Path $archive) { Remove-Item -LiteralPath $archive -Force }
-Compress-Archive -Path "dist\LittleRoach" -DestinationPath $archive -CompressionLevel Optimal
+Move-Item -LiteralPath $tempArchive -Destination $archive
 Write-Host "App: dist\LittleRoach\LittleRoach.exe"
 Write-Host "Share: dist\LittleRoach-portable.zip"

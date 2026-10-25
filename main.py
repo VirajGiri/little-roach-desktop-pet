@@ -20,10 +20,11 @@ except ImportError:  # pragma: no cover - Windows-only integration
     winreg = None
 
 
-KEY_COLOR = "#ff00ff"
-PET_W, PET_H = 171, 114
-SPRITE_SOURCE_SUBSAMPLE = 9
+KEY_COLOR = "#010203"
+PET_W, PET_H = 192, 192
 SPRITE_SUBSAMPLE = 10
+WALK_FRAMES = 8
+DIRECTION_COUNT = 16
 APP_NAME = "Little Roach"
 
 
@@ -79,16 +80,15 @@ class CockroachPet:
         self.canvas.pack()
         bundle_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
         asset_dir = bundle_dir / "assets"
-        self.sprite_sources = {
-            "right": tk.PhotoImage(file=str(asset_dir / "roach_nymph_right.png")).subsample(
-                SPRITE_SOURCE_SUBSAMPLE, SPRITE_SOURCE_SUBSAMPLE
-            ),
-            "left": tk.PhotoImage(file=str(asset_dir / "roach_nymph_left.png")).subsample(
-                SPRITE_SOURCE_SUBSAMPLE, SPRITE_SOURCE_SUBSAMPLE
-            ),
-        }
-        self.sprite_cache: dict[tuple[str, int], tk.PhotoImage] = {}
-        self.facing = "right"
+        self.sprite_sources = [
+            [
+                tk.PhotoImage(file=str(asset_dir / f"roach_walk_{frame}_dir_{direction}.png"))
+                for frame in range(WALK_FRAMES)
+            ]
+            for direction in range(DIRECTION_COUNT)
+        ]
+        self.sprite_cache: dict[tuple[int, int, int], tk.PhotoImage] = {}
+        self.direction = 0
         self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self._start_x(), self._start_y()))
         # Keep the entire drawing visible even if the window manager reports a
         # smaller default size for this borderless top-level window.
@@ -112,11 +112,12 @@ class CockroachPet:
         self.drag_offset = (0, 0)
         self.target = (self.root.winfo_x(), self.root.winfo_y())
         self.rest_until: int | None = None
-        self.move_speed = self.settings.speed * 1.6
+        self.move_speed = self.settings.speed * 2.2
         self.burst_steps = 0
         self.moving = False
+        self.gait_distance = 0.0
         self.frame = 0
-        self.root.after(80, self._tick)
+        self.root.after(40, self._tick)
 
     def _start_x(self) -> int:
         if sys.platform == "win32":
@@ -192,7 +193,7 @@ class CockroachPet:
         panel.grid()
         ttk.Label(panel, text="Wandering speed").grid(row=0, column=0, sticky="w")
         speed = tk.DoubleVar(value=self.settings.speed)
-        ttk.Scale(panel, from_=0.4, to=2.4, variable=speed, orient="horizontal", length=210).grid(row=0, column=1, padx=10)
+        ttk.Scale(panel, from_=0.4, to=3.0, variable=speed, orient="horizontal", length=210).grid(row=0, column=1, padx=10)
         ttk.Label(panel, text="Pet size").grid(row=1, column=0, sticky="w", pady=(12, 0))
         size = tk.DoubleVar(value=self.settings.scale)
         ttk.Scale(panel, from_=0.7, to=2.0, variable=size, orient="horizontal", length=210).grid(row=1, column=1, padx=10, pady=(12, 0))
@@ -207,7 +208,9 @@ class CockroachPet:
                 if old_startup != self.settings.start_with_windows:
                     set_startup(self.settings.start_with_windows)
                 save_settings(self.settings)
-                self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self.root.winfo_x(), self.root.winfo_y()))
+                width, height = int(PET_W*self.settings.scale), int(PET_H*self.settings.scale)
+                self.root.minsize(width, height)
+                self.root.geometry(self._geometry(width, height, self.root.winfo_x(), self.root.winfo_y()))
                 win.destroy()
             except OSError as exc:
                 messagebox.showerror("Could not save settings", str(exc), parent=win)
@@ -220,14 +223,18 @@ class CockroachPet:
         s = self.settings.scale
         c.configure(width=int(PET_W*s), height=int(PET_H*s))
         zoom = max(1, round(s * SPRITE_SUBSAMPLE))
-        key = (self.facing, zoom)
+        pose = (int(self.gait_distance / 10.0) % WALK_FRAMES) if self.moving else 0
+        key = (self.direction, pose, zoom)
         sprite = self.sprite_cache.get(key)
         if sprite is None:
-            sprite = self.sprite_sources[self.facing].zoom(zoom, zoom).subsample(
+            sprite = self.sprite_sources[self.direction][pose].zoom(zoom, zoom).subsample(
                 SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE
             )
             self.sprite_cache[key] = sprite
-        bob = math.sin(self.frame * (0.75 if self.moving else 0.22)) * (1.4 if self.moving else 0.45)
+        bob = (
+            math.sin(self.gait_distance * (2 * math.pi / (WALK_FRAMES * 10.0))) * 1.4
+            if self.moving else math.sin(self.frame * 0.22) * 0.35
+        )
         c.create_image(int(PET_W*s)/2, int(PET_H*s)/2 + bob, image=sprite)
 
     def _tick(self) -> None:
@@ -249,22 +256,24 @@ class CockroachPet:
                         self.move_speed = self.settings.speed * random.uniform(2.8, 4.2)
                     else:
                         self.burst_steps = 0
-                        self.move_speed = self.settings.speed * random.uniform(1.2, 2.0)
+                        self.move_speed = self.settings.speed * random.uniform(1.8, 2.6)
                     self.moving = True
             elif distance < 7:
                 self.moving = False
-                self.rest_until = self.frame + random.randint(9, 28)
+                self.rest_until = self.frame + random.randint(18, 56)
             else:
                 self.moving = True
-                self.facing = "left" if dx < 0 else "right"
-                step = min(distance, max(1.0, self.move_speed * 1.4))
+                angle = math.degrees(math.atan2(dy, dx)) % 360.0
+                self.direction = int(round(angle / (360.0 / DIRECTION_COUNT))) % DIRECTION_COUNT
+                step = min(distance, max(1.0, self.move_speed))
+                self.gait_distance += step
                 self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), int(x+dx/distance*step), int(y+dy/distance*step)))
                 if self.burst_steps > 0:
                     self.burst_steps -= 1
                     if self.burst_steps == 0:
-                        self.move_speed = self.settings.speed * random.uniform(1.2, 2.0)
+                        self.move_speed = self.settings.speed * random.uniform(1.8, 2.6)
         self._draw()
-        self.root.after(80, self._tick)
+        self.root.after(40, self._tick)
 
     def run(self) -> None:
         self.root.mainloop()
@@ -275,6 +284,10 @@ if __name__ == "__main__":
         # The Tcl/Tk libraries are bundled beside the executable's unpacked
         # files. Set these explicitly so Tcl 8.6 can find its startup scripts.
         bundle_dir = Path(sys._MEIPASS)
-        os.environ["TCL_LIBRARY"] = str(bundle_dir / "_tcl_data")
-        os.environ["TK_LIBRARY"] = str(bundle_dir / "_tk_data")
+        os.environ["TCL_LIBRARY"] = os.environ.get(
+            "LITTLE_ROACH_TCL_LIBRARY", str(bundle_dir / "_tcl_data")
+        )
+        os.environ["TK_LIBRARY"] = os.environ.get(
+            "LITTLE_ROACH_TK_LIBRARY", str(bundle_dir / "_tk_data")
+        )
     CockroachPet().run()

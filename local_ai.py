@@ -13,4 +13,3 @@ class OfflineAssistant:
 
     def respond(self, interaction: str) -> str:
         return "Thanks for saying hello!" if interaction == "greet" else "*antennae wiggle*"
-

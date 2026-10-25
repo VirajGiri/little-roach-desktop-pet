@@ -17,7 +17,7 @@ class FixedRandom:
 class PetCoreTests(unittest.TestCase):
     def test_settings_are_clamped_to_supported_ranges(self):
         settings = PetSettings.from_dict({"speed": 99, "scale": 0, "start_with_windows": True})
-        self.assertEqual((settings.speed, settings.scale, settings.start_with_windows), (2.4, 0.7, True))
+        self.assertEqual((settings.speed, settings.scale, settings.start_with_windows), (3.0, 0.7, True))
 
     def test_local_target_stays_inside_virtual_screen(self):
         x, y = choose_target(-900, 100, (-1920, 0, 3000, 1080), 112, 96, 1,
@@ -36,4 +36,3 @@ class PetCoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

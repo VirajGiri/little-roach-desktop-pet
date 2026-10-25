@@ -11,14 +11,14 @@ from typing import Any
 
 @dataclass
 class PetSettings:
-    speed: float = 1.0
-    scale: float = 1.8
+    speed: float = 1.5
+    scale: float = 1.0
     start_with_windows: bool = False
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "PetSettings":
-        speed = min(2.4, max(0.4, float(values.get("speed", 1.0))))
-        scale = min(2.0, max(0.7, float(values.get("scale", 1.8))))
+        speed = min(3.0, max(0.4, float(values.get("speed", 1.5))))
+        scale = min(2.0, max(0.7, float(values.get("scale", 1.0))))
         return cls(speed, scale, bool(values.get("start_with_windows", False)))
 
 
@@ -43,4 +43,3 @@ def choose_target(x: int, y: int, screen: tuple[int, int, int, int],
         tx = int(min(max_x, max(min_x, x + rng.randint(-max_hop, max_hop))))
         ty = int(min(max_y, max(min_y, y + rng.randint(-max_hop // 2, max_hop // 2))))
     return tx, ty
-
