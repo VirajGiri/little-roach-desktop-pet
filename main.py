@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import math
 import os
@@ -20,7 +19,6 @@ from pet_core import (
     approach_angle,
     choose_target,
     forward_crawl_step,
-    gait_pose,
     movement_step,
     settings_path,
 )
@@ -33,8 +31,6 @@ except ImportError:  # pragma: no cover - Windows-only integration
 
 KEY_COLOR = "#010203"
 PET_W, PET_H = 192, 192
-SPRITE_SUBSAMPLE = 10
-WALK_FRAMES = 8
 DIRECTION_COUNT = 32
 STRIDE_DISTANCE = 72.0
 FRAME_INTERVAL_MS = 16
@@ -46,7 +42,9 @@ def load_settings() -> PetSettings:
     path = settings_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return PetSettings.from_dict(data)
+        settings = PetSettings.from_dict(data)
+        settings.scale = round(settings.scale * 10) / 10
+        return settings
     except (OSError, ValueError, TypeError):
         return PetSettings()
 
@@ -229,7 +227,8 @@ class CockroachPet:
 
         def apply() -> None:
             old_startup = self.settings.start_with_windows
-            self.settings = PetSettings(speed=float(speed.get()), scale=float(size.get()), start_with_windows=startup.get())
+            selected_scale = round(float(size.get()) * 10) / 10
+            self.settings = PetSettings(speed=float(speed.get()), scale=selected_scale, start_with_windows=startup.get())
             try:
                 if old_startup != self.settings.start_with_windows:
                     set_startup(self.settings.start_with_windows)
@@ -250,16 +249,15 @@ class CockroachPet:
     def _draw(self) -> None:
         c = self.canvas
         s = self.settings.scale
-        zoom = max(1, round(s * SPRITE_SUBSAMPLE))
-        pose = gait_pose(self.gait_distance, WALK_FRAMES, STRIDE_DISTANCE) if (self.moving or self.turning) else 0
-        key = (self.direction, pose, zoom)
+        scale_step = min(20, max(7, round(s * 10)))
+        # The reference is a side view, so show it facing the travel direction
+        # and avoid fake perspective rotations that alter the cockroach.
+        facing = "left" if 8 < self.direction < 24 else "right"
+        key = (0 if facing == "right" else 1, scale_step, 0)
         sprite = self.sprite_cache.get(key)
         if sprite is None:
-            # Read with Python and pass PNG data to Tk. This avoids Tcl's
-            # Windows path handling for app folders under user profiles.
-            sprite_path = self.asset_dir / f"roach_walk_{pose}_dir_{self.direction}.png"
-            source = tk.PhotoImage(data=base64.b64encode(sprite_path.read_bytes()))
-            sprite = source.zoom(zoom, zoom).subsample(SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE)
+            sprite_path = self.asset_dir / f"roach_photo_{facing}_scale_{scale_step}.png"
+            sprite = tk.PhotoImage(file=str(sprite_path))
             self.sprite_cache[key] = sprite
             if len(self.sprite_cache) > MAX_CACHED_SPRITES:
                 self.sprite_cache.popitem(last=False)
