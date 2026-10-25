@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import sys
 import tkinter as tk
@@ -247,5 +248,11 @@ class CockroachPet:
 
 
 if __name__ == "__main__":
+    if getattr(sys, "frozen", False):
+        # The Tcl/Tk libraries are bundled beside the executable's unpacked
+        # files. Set these explicitly so Tcl 8.6 can find its startup scripts.
+        bundle_dir = Path(sys._MEIPASS)
+        os.environ["TCL_LIBRARY"] = str(bundle_dir / "_tcl_data")
+        os.environ["TK_LIBRARY"] = str(bundle_dir / "_tk_data")
     CockroachPet().run()
 
