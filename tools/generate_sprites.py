@@ -1,11 +1,14 @@
-"""Prepare 16 gait poses and 32 headings from two eight-view roach sheets.
+"""Build consistent views from the exact cockroach image supplied by the user.
 
-Requires Pillow and NumPy. These are asset-authoring dependencies only.
+Authoring dependencies: Pillow and NumPy. Neither is needed at runtime.
+The single source view is rotated in the image plane to preserve the same
+individual in every heading; small body rocking offsets provide crawl motion.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import math
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -13,32 +16,26 @@ from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
 ART = ROOT / "artwork"
-SOURCES = (ART / "roach_views_gait_01.png", ART / "roach_views_gait_02.png")
+SOURCE = ART / "roach_reference_original.png"
+CUTOUT = ART / "roach_reference_cutout.png"
 ASSETS = ROOT / "assets"
 FRAME_COUNT = 16
-VIEW_COUNT = 8
 DIRECTION_COUNT = 32
 OUTPUT_SIZE = 192
-FIT_WIDTH = 150
-FIT_HEIGHT = 132
+FIT_WIDTH = 158
+FIT_HEIGHT = 158
 
 
-def clean_edge(image: Image.Image) -> Image.Image:
-    """Keep the insect silhouette and nearby antialiasing, pruning cell spill."""
-    rgba = image.convert("RGBA")
-    alpha = rgba.getchannel("A")
-    core = np.asarray(alpha, dtype=np.uint8) >= 96
-    # Some source cells contain antenna fragments from the neighboring cell.
-    # Keep the largest connected solid insect silhouette, then retain soft
-    # edges and thin appendages within a six-pixel margin of that silhouette.
-    seen = np.zeros(core.shape, dtype=bool)
-    largest: list[int] = []
-    height, width = core.shape
-    for y, x in zip(*np.where(core)):
+def largest_component(binary: np.ndarray) -> np.ndarray:
+    """Discard isolated high-frequency background texture from the matte."""
+    height, width = binary.shape
+    seen = np.zeros(binary.shape, dtype=bool)
+    best: list[int] = []
+    for y, x in zip(*np.where(binary)):
         if seen[y, x]:
             continue
-        stack = [int(y * width + x)]
         seen[y, x] = True
+        stack = [int(y * width + x)]
         component: list[int] = []
         while stack:
             index = stack.pop()
@@ -46,76 +43,86 @@ def clean_edge(image: Image.Image) -> Image.Image:
             cy, cx = divmod(index, width)
             for ny in range(max(0, cy - 1), min(height, cy + 2)):
                 for nx in range(max(0, cx - 1), min(width, cx + 2)):
-                    if core[ny, nx] and not seen[ny, nx]:
+                    if binary[ny, nx] and not seen[ny, nx]:
                         seen[ny, nx] = True
                         stack.append(ny * width + nx)
-        if len(component) > len(largest):
-            largest = component
-    if not largest:
-        return rgba
-    body = np.zeros(core.shape, dtype=np.uint8)
-    body.flat[largest] = 255
-    nearby = Image.fromarray(body, "L").filter(ImageFilter.MaxFilter(13))
-    keep = np.asarray(nearby, dtype=np.uint8) > 0
-    pixels = np.asarray(rgba, dtype=np.uint8).copy()
-    pixels[..., 3] = np.where(keep, pixels[..., 3], 0).astype(np.uint8)
-    pixels[pixels[..., 3] == 0, :3] = 0
-    return Image.fromarray(pixels, "RGBA")
+        if len(component) > len(best):
+            best = component
+    result = np.zeros(binary.shape, dtype=np.uint8)
+    if best:
+        result.flat[best] = 255
+    return result
 
 
-def load_cells() -> list[list[Image.Image]]:
-    cells: list[list[Image.Image]] = []
-    for sheet_index, source in enumerate(SOURCES):
-        sheet = Image.open(source).convert("RGBA")
-        if sheet.width != sheet.height or sheet.width < 8:
-            raise ValueError(f"Expected a square 8x8 sheet, got {source.name}: {sheet.size}")
-        for row in range(8):
-            pose = sheet_index * 8 + row
-            for view in range(VIEW_COUNT):
-                bounds = tuple(round(n * sheet.width / 8) for n in (view, row, view + 1, row + 1))
-                cell = clean_edge(sheet.crop(bounds))
-                alpha = np.asarray(cell.getchannel("A"))
-                ys, xs = np.where(alpha > 24)
-                if not len(xs):
-                    raise ValueError(f"No insect found in pose {pose}, view {view}")
-                crop = cell.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
-                factor = min(FIT_WIDTH / crop.width, FIT_HEIGHT / crop.height)
-                size = (max(1, round(crop.width * factor)), max(1, round(crop.height * factor)))
-                crop = crop.resize(size, Image.Resampling.LANCZOS)
-                frame = Image.new("RGBA", (OUTPUT_SIZE, OUTPUT_SIZE), (0, 0, 0, 0))
-                frame.alpha_composite(crop, ((OUTPUT_SIZE - crop.width) // 2,
-                                             OUTPUT_SIZE - 28 - crop.height))
-                while len(cells) <= pose:
-                    cells.append([])
-                cells[pose].append(frame)
-    return cells
+def make_cutout() -> Image.Image:
+    """Use the photo's local detail to separate the textured insect from glow."""
+    source = Image.open(SOURCE).convert("RGB")
+    pixels = np.asarray(source, dtype=np.int16)
+    local_average = np.asarray(source.filter(ImageFilter.GaussianBlur(3.0)), dtype=np.int16)
+    detail = np.max(np.abs(pixels - local_average), axis=2)
+    mask = Image.fromarray(np.where(detail >= 8, 255, 0).astype(np.uint8), "L")
+    # Close tiny gaps in the shell and legs without drawing the soft backdrop in.
+    mask = mask.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.MinFilter(9))
+    silhouette = largest_component(np.asarray(mask, dtype=np.uint8) > 0)
+    mask = Image.fromarray(silhouette, "L").filter(ImageFilter.MinFilter(3))
+
+    rgba = source.convert("RGBA")
+    rgba.putalpha(mask)
+    rgba_pixels = np.asarray(rgba, dtype=np.uint8).copy()
+    rgba_pixels[rgba_pixels[..., 3] == 0, :3] = (1, 2, 3)
+    cutout = Image.fromarray(rgba_pixels, "RGBA")
+    cutout.save(CUTOUT, optimize=True)
+    return cutout
 
 
 def main() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
-    frames = load_cells()
-    for path in ASSETS.glob("roach_walk_*_dir_*.png"):
-        path.unlink()
+    cutout = make_cutout()
+    alpha = np.asarray(cutout.getchannel("A"), dtype=np.uint8)
+    ys, xs = np.where(alpha > 0)
+    if not len(xs):
+        raise ValueError("The reference cutout is empty; check the source image.")
+    source = cutout.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+    factor = min(FIT_WIDTH / source.width, FIT_HEIGHT / source.height)
+    size = (max(1, round(source.width * factor)), max(1, round(source.height * factor)))
+    source = source.resize(size, Image.Resampling.LANCZOS)
+
+    for old in ASSETS.glob("roach_walk_*_dir_*.png"):
+        old.unlink()
 
     for direction in range(DIRECTION_COUNT):
         angle = direction * 360.0 / DIRECTION_COUNT
-        view = int(round(angle / 45.0)) % VIEW_COUNT
-        view_angle = view * 45.0
-        offset = (angle - view_angle + 180.0) % 360.0 - 180.0
         for pose in range(FRAME_COUNT):
-            # Each 45-degree interval uses its own painted body perspective;
-            # the small rotation only fills the gaps between those views.
-            sprite = frames[pose][view]
-            if abs(offset) >= 0.01:
-                sprite = sprite.rotate(-offset, resample=Image.Resampling.BICUBIC)
-            # Windows' Tk color-key transparency cannot composite soft PNG
-            # edges against arbitrary desktop colors. A binary silhouette
-            # prevents the dark matte fringe seen around the earlier sprite.
-            alpha = sprite.getchannel("A").point(lambda value: 255 if value >= 160 else 0)
-            sprite.putalpha(alpha)
-            sprite.save(ASSETS / f"roach_walk_{pose}_dir_{direction}.png", optimize=True)
+            phase = 2 * math.pi * pose / FRAME_COUNT
+            # Keep the supplied photograph intact; only rock the whole body a
+            # little as it crawls. This avoids swapping in a different insect.
+            rocking = 2.4 * math.sin(phase)
+            sprite = source.rotate(-angle - rocking, resample=Image.Resampling.BICUBIC, expand=True)
+            scale = 1.0 + 0.01 * math.cos(phase)
+            if abs(scale - 1.0) > 0.001:
+                sprite = sprite.resize((round(sprite.width * scale), round(sprite.height * scale)),
+                                       Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (OUTPUT_SIZE, OUTPUT_SIZE), (1, 2, 3, 0))
+            x = (OUTPUT_SIZE - sprite.width) // 2
+            y = (OUTPUT_SIZE - sprite.height) // 2 + round(math.sin(phase) * 1.5)
+            canvas.alpha_composite(sprite, (x, y))
+            # The Windows color-key window needs crisp transparent pixels.
+            a = canvas.getchannel("A").point(lambda value: 255 if value >= 160 else 0)
+            canvas.putalpha(a)
+            rgb = np.asarray(canvas, dtype=np.uint8).copy()
+            rgb[rgb[..., 3] == 0, :3] = (1, 2, 3)
+            Image.fromarray(rgb, "RGBA").save(
+                ASSETS / f"roach_walk_{pose}_dir_{direction}.png", optimize=True
+            )
 
-    print(f"Wrote {FRAME_COUNT} poses x {DIRECTION_COUNT} headings from {VIEW_COUNT} body views to {ASSETS}")
+    preview = Image.new("RGB", (OUTPUT_SIZE * 4, OUTPUT_SIZE * 4), (34, 40, 46))
+    for row, pose in enumerate((0, 4, 8, 12)):
+        for column, direction in enumerate((0, 8, 16, 24)):
+            frame = Image.open(ASSETS / f"roach_walk_{pose}_dir_{direction}.png").convert("RGBA")
+            preview.paste(frame, (column * OUTPUT_SIZE, row * OUTPUT_SIZE), frame)
+    preview.save(ART / "roach_animation_preview.png", optimize=True)
+
+    print(f"Wrote {FRAME_COUNT} motion poses x {DIRECTION_COUNT} headings from the supplied roach photo.")
 
 
 if __name__ == "__main__":
