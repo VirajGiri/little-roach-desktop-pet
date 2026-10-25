@@ -74,7 +74,12 @@ class CockroachPet:
         self.canvas = tk.Canvas(self.root, width=PET_W, height=PET_H, bg=KEY_COLOR,
                                 highlightthickness=0, bd=0)
         self.canvas.pack()
-        self.root.geometry(self._geometry(PET_W, PET_H, self._start_x(), self._start_y()))
+        self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self._start_x(), self._start_y()))
+        # Keep the entire drawing visible even if the window manager reports a
+        # smaller default size for this borderless top-level window.
+        self.root.minsize(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale))
+        self.root.lift()
+        self.root.attributes("-topmost", True)
         self.root.bind("<Button-1>", self._press)
         self.root.bind("<B1-Motion>", self._drag)
         self.root.bind("<ButtonRelease-1>", self._release)
@@ -98,11 +103,12 @@ class CockroachPet:
         self.root.after(80, self._tick)
 
     def _start_x(self) -> int:
-        return self._virtual_screen()[0] + self._virtual_screen()[2] // 2
+        left, _top, width, _height = self._virtual_screen()
+        return left + (width - int(PET_W*self.settings.scale)) // 2
 
     def _start_y(self) -> int:
-        left, top, width, height = self._virtual_screen()
-        return top + height // 2
+        _left, top, _width, height = self._virtual_screen()
+        return top + (height - int(PET_H*self.settings.scale)) // 2
 
     @staticmethod
     def _geometry(width: int, height: int, x: int, y: int) -> str:
