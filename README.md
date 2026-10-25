@@ -12,16 +12,16 @@ Requirements: Windows 10/11 and Python 3.10 or newer with Tkinter. There are no 
 
 Settings are saved under `%APPDATA%\LittleRoach\settings.json`. “Start with Windows” adds or removes a per-user Run entry in the Windows registry. No administrator access is required.
 
-## Build a standalone executable
+## Build a shareable Windows app
 
-On a Windows machine with Python and internet access for the one-time build-tool install:
+On a Windows machine with Python 3.10+ including Tcl/Tk support and internet access for the one-time build-tool install:
 
 ```powershell
-py -m pip install pyinstaller
-py -m PyInstaller --onefile --windowed --name LittleRoach main.py
+python -m pip install pyinstaller
+.\build_windows.ps1
 ```
 
-The executable is written to `dist\LittleRoach.exe`. For startup registration, run this built executable once and enable **Start with Windows** in Settings.
+The build creates a portable app folder and a ZIP file. Share `dist\LittleRoach-portable.zip`; the recipient extracts it and opens `LittleRoach\LittleRoach.exe`. They do not need Python installed. Keep the executable beside its `_internal` folder; the executable alone is not enough because the app uses bundled Tcl/Tk files. For startup registration, open the executable and enable **Start with Windows** in Settings.
 
 ## Behavior and limitations
 
