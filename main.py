@@ -103,12 +103,20 @@ class CockroachPet:
         self.root.after(80, self._tick)
 
     def _start_x(self) -> int:
-        left, _top, width, _height = self._virtual_screen()
-        return left + (width - int(PET_W*self.settings.scale)) // 2
+        if sys.platform == "win32":
+            import ctypes
+            width = ctypes.windll.user32.GetSystemMetrics(0)
+        else:
+            width = 1920
+        return (width - int(PET_W*self.settings.scale)) // 2
 
     def _start_y(self) -> int:
-        _left, top, _width, height = self._virtual_screen()
-        return top + (height - int(PET_H*self.settings.scale)) // 2
+        if sys.platform == "win32":
+            import ctypes
+            height = ctypes.windll.user32.GetSystemMetrics(1)
+        else:
+            height = 1080
+        return (height - int(PET_H*self.settings.scale)) // 2
 
     @staticmethod
     def _geometry(width: int, height: int, x: int, y: int) -> str:
@@ -164,7 +172,7 @@ class CockroachPet:
         ttk.Scale(panel, from_=0.4, to=2.4, variable=speed, orient="horizontal", length=210).grid(row=0, column=1, padx=10)
         ttk.Label(panel, text="Pet size").grid(row=1, column=0, sticky="w", pady=(12, 0))
         size = tk.DoubleVar(value=self.settings.scale)
-        ttk.Scale(panel, from_=0.7, to=1.6, variable=size, orient="horizontal", length=210).grid(row=1, column=1, padx=10, pady=(12, 0))
+        ttk.Scale(panel, from_=0.7, to=2.0, variable=size, orient="horizontal", length=210).grid(row=1, column=1, padx=10, pady=(12, 0))
         startup = tk.BooleanVar(value=self.settings.start_with_windows)
         ttk.Checkbutton(panel, text="Start with Windows", variable=startup).grid(row=2, column=0, columnspan=2, sticky="w", pady=(12, 0))
         ttk.Label(panel, text="Right-click the pet for actions. Double-click to say hello.", wraplength=300).grid(row=3, column=0, columnspan=2, sticky="w", pady=(12, 0))
@@ -190,6 +198,7 @@ class CockroachPet:
         c.configure(width=int(PET_W*s), height=int(PET_H*s))
         cx, cy = 56, 55
         leg_sway = math.sin(self.frame * 0.42) * 3
+        c.create_oval(17, 12, 95, 92, fill="#f6d98e", outline="#734222", width=2)
         # Six legs, with small alternating steps.
         for side in (-1, 1):
             for i, y in enumerate((45, 55, 65)):
@@ -223,7 +232,7 @@ class CockroachPet:
         if not self.paused and not self.dragging:
             x, y = self.root.winfo_x(), self.root.winfo_y()
             if self.frame >= self.next_target_at or math.hypot(x-self.target[0], y-self.target[1]) < 8:
-                self.target = choose_target(x, y, self._virtual_screen(), PET_W, PET_H, self.settings.speed, random)
+                self.target = choose_target(x, y, self._virtual_screen(), int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self.settings.speed, random)
                 self.next_target_at = self.frame + random.randint(18, 48)
             dx, dy = self.target[0]-x, self.target[1]-y
             distance = math.hypot(dx, dy)
