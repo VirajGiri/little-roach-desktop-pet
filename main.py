@@ -21,7 +21,9 @@ except ImportError:  # pragma: no cover - Windows-only integration
 
 
 KEY_COLOR = "#ff00ff"
-PET_W, PET_H = 112, 96
+PET_W, PET_H = 171, 114
+SPRITE_SOURCE_SUBSAMPLE = 9
+SPRITE_SUBSAMPLE = 10
 APP_NAME = "Little Roach"
 
 
@@ -75,6 +77,18 @@ class CockroachPet:
         self.canvas = tk.Canvas(self.root, width=PET_W, height=PET_H, bg=KEY_COLOR,
                                 highlightthickness=0, bd=0)
         self.canvas.pack()
+        bundle_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        asset_dir = bundle_dir / "assets"
+        self.sprite_sources = {
+            "right": tk.PhotoImage(file=str(asset_dir / "roach_nymph_right.png")).subsample(
+                SPRITE_SOURCE_SUBSAMPLE, SPRITE_SOURCE_SUBSAMPLE
+            ),
+            "left": tk.PhotoImage(file=str(asset_dir / "roach_nymph_left.png")).subsample(
+                SPRITE_SOURCE_SUBSAMPLE, SPRITE_SOURCE_SUBSAMPLE
+            ),
+        }
+        self.sprite_cache: dict[tuple[str, int], tk.PhotoImage] = {}
+        self.facing = "right"
         self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self._start_x(), self._start_y()))
         # Keep the entire drawing visible even if the window manager reports a
         # smaller default size for this borderless top-level window.
@@ -84,11 +98,11 @@ class CockroachPet:
         self.root.bind("<Button-1>", self._press)
         self.root.bind("<B1-Motion>", self._drag)
         self.root.bind("<ButtonRelease-1>", self._release)
-        self.root.bind("<Double-Button-1>", self._greet)
+        self.root.bind("<Double-Button-1>", self._startle)
         self.root.bind("<Button-3>", self._show_menu)
         self.root.bind("<Escape>", lambda _event: self.root.destroy())
         self.menu = tk.Menu(self.root, tearoff=False)
-        self.menu.add_command(label="Pet me", command=self._greet)
+        self.menu.add_command(label="Startle (make it scurry)", command=self._startle)
         self.menu.add_command(label="Settings…", command=self._open_settings)
         self.menu.add_command(label="Pause wandering", command=self._toggle_pause)
         self.menu.add_separator()
@@ -96,10 +110,11 @@ class CockroachPet:
         self.paused = False
         self.dragging = False
         self.drag_offset = (0, 0)
-        self.greeting_until = 0
-        self.greeting = "Hi!"
         self.target = (self.root.winfo_x(), self.root.winfo_y())
-        self.next_target_at = 0
+        self.rest_until: int | None = None
+        self.move_speed = self.settings.speed * 1.6
+        self.burst_steps = 0
+        self.moving = False
         self.frame = 0
         self.root.after(80, self._tick)
 
@@ -144,7 +159,7 @@ class CockroachPet:
 
     def _release(self, _event: tk.Event) -> None:
         self.dragging = False
-        self.next_target_at = self.frame + 1
+        self.rest_until = None
 
     def _show_menu(self, event: tk.Event) -> None:
         self.menu.tk_popup(event.x_root, event.y_root)
@@ -153,9 +168,16 @@ class CockroachPet:
         self.paused = not self.paused
         self.menu.entryconfigure(2, label="Resume wandering" if self.paused else "Pause wandering")
 
-    def _greet(self, _event: tk.Event | None = None) -> None:
-        self.greeting = random.choice(("Hi!", "Snack time?", "Roach-y day!"))
-        self.greeting_until = self.frame + 34
+    def _startle(self, _event: tk.Event | None = None) -> None:
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        self.target = choose_target(
+            x, y, self._virtual_screen(), int(PET_W*self.settings.scale),
+            int(PET_H*self.settings.scale), self.settings.speed * 2.2, random,
+        )
+        self.move_speed = self.settings.speed * random.uniform(4.5, 6.0)
+        self.burst_steps = random.randint(18, 30)
+        self.rest_until = None
+        self.moving = True
 
     def _open_settings(self) -> None:
         if getattr(self, "settings_window", None) and self.settings_window.winfo_exists():
@@ -197,49 +219,50 @@ class CockroachPet:
         c.delete("all")
         s = self.settings.scale
         c.configure(width=int(PET_W*s), height=int(PET_H*s))
-        cx, cy = 56, 55
-        leg_sway = math.sin(self.frame * 0.42) * 3
-        c.create_oval(17, 12, 95, 92, fill="#f6d98e", outline="#734222", width=2)
-        # Six legs, with small alternating steps.
-        for side in (-1, 1):
-            for i, y in enumerate((45, 55, 65)):
-                start_x = cx + side * (13 if i != 1 else 7)
-                offset = leg_sway * (1 if (i + (side > 0)) % 2 else -1)
-                c.create_line(start_x, y, start_x + side * 11, y + 3 + offset,
-                              start_x + side * 18, y + 8 - offset, fill="#482719", width=2, smooth=True)
-            # Long, gently moving antennae.
-            a = math.sin(self.frame * 0.12 + side) * 4
-            c.create_line(cx + side*5, 28, cx + side*9, 16, cx + side*(16+a), 8,
-                          fill="#382016", width=2, smooth=True)
-        c.create_oval(cx-25, 34, cx+24, 73, fill="#7b3c20", outline="#3c2117", width=2)
-        c.create_oval(cx-17, 39, cx+18, 70, fill="#a95b2b", outline="")
-        # Wing seam and gentle shell highlights.
-        c.create_line(cx, 40, cx, 68, fill="#66351f", width=2)
-        c.create_arc(cx-15, 40, cx-1, 66, start=75, extent=210, style="arc", outline="#d18545", width=2)
-        c.create_oval(cx-8, 27, cx+9, 44, fill="#542a1b", outline="#351d16", width=2)
-        c.create_oval(cx-5, 31, cx-2, 34, fill="#f6e5bf", outline="")
-        c.create_oval(cx+3, 31, cx+6, 34, fill="#f6e5bf", outline="")
-        c.create_oval(cx-4, 32, cx-3, 33, fill="#21140f", outline="")
-        c.create_oval(cx+4, 32, cx+5, 33, fill="#21140f", outline="")
-        if self.frame < self.greeting_until:
-            c.create_oval(4, 3, 70, 27, fill="#fff9e9", outline="#6f472d", width=1)
-            c.create_text(37, 15, text=self.greeting,
-                          font=("Segoe UI", 8, "bold"), fill="#402419")
-        if s != 1:
-            c.scale("all", 0, 0, s, s)
+        zoom = max(1, round(s * SPRITE_SUBSAMPLE))
+        key = (self.facing, zoom)
+        sprite = self.sprite_cache.get(key)
+        if sprite is None:
+            sprite = self.sprite_sources[self.facing].zoom(zoom, zoom).subsample(
+                SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE
+            )
+            self.sprite_cache[key] = sprite
+        bob = math.sin(self.frame * (0.75 if self.moving else 0.22)) * (1.4 if self.moving else 0.45)
+        c.create_image(int(PET_W*s)/2, int(PET_H*s)/2 + bob, image=sprite)
 
     def _tick(self) -> None:
         self.frame += 1
         if not self.paused and not self.dragging:
             x, y = self.root.winfo_x(), self.root.winfo_y()
-            if self.frame >= self.next_target_at or math.hypot(x-self.target[0], y-self.target[1]) < 8:
-                self.target = choose_target(x, y, self._virtual_screen(), int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self.settings.speed, random)
-                self.next_target_at = self.frame + random.randint(18, 48)
             dx, dy = self.target[0]-x, self.target[1]-y
             distance = math.hypot(dx, dy)
-            if distance > 0:
-                step = min(distance, max(1.0, self.settings.speed * 2.0))
+            if self.rest_until is not None:
+                self.moving = False
+                if self.frame >= self.rest_until:
+                    self.target = choose_target(
+                        x, y, self._virtual_screen(), int(PET_W*self.settings.scale),
+                        int(PET_H*self.settings.scale), self.settings.speed, random,
+                    )
+                    self.rest_until = None
+                    if random.random() < 0.24:
+                        self.burst_steps = random.randint(8, 17)
+                        self.move_speed = self.settings.speed * random.uniform(2.8, 4.2)
+                    else:
+                        self.burst_steps = 0
+                        self.move_speed = self.settings.speed * random.uniform(1.2, 2.0)
+                    self.moving = True
+            elif distance < 7:
+                self.moving = False
+                self.rest_until = self.frame + random.randint(9, 28)
+            else:
+                self.moving = True
+                self.facing = "left" if dx < 0 else "right"
+                step = min(distance, max(1.0, self.move_speed * 1.4))
                 self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), int(x+dx/distance*step), int(y+dy/distance*step)))
+                if self.burst_steps > 0:
+                    self.burst_steps -= 1
+                    if self.burst_steps == 0:
+                        self.move_speed = self.settings.speed * random.uniform(1.2, 2.0)
         self._draw()
         self.root.after(80, self._tick)
 
@@ -255,4 +278,3 @@ if __name__ == "__main__":
         os.environ["TCL_LIBRARY"] = str(bundle_dir / "_tcl_data")
         os.environ["TK_LIBRARY"] = str(bundle_dir / "_tk_data")
     CockroachPet().run()
-
