@@ -89,7 +89,8 @@ class CockroachPet:
         ]
         self.sprite_cache: dict[tuple[int, int, int], tk.PhotoImage] = {}
         self.direction = 0
-        self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), self._start_x(), self._start_y()))
+        start_x, start_y = self._start_x(), self._start_y()
+        self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), start_x, start_y))
         # Keep the entire drawing visible even if the window manager reports a
         # smaller default size for this borderless top-level window.
         self.root.minsize(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale))
@@ -110,7 +111,10 @@ class CockroachPet:
         self.paused = False
         self.dragging = False
         self.drag_offset = (0, 0)
-        self.target = (self.root.winfo_x(), self.root.winfo_y())
+        # Tk can report (0, 0) until the borderless window is mapped. Keep the
+        # initial target tied to the explicit geometry so the first crawl
+        # starts where the pet was placed instead of darting to the corner.
+        self.target = (start_x, start_y)
         self.rest_until: int | None = None
         self.move_speed = self.settings.speed * 2.2
         self.burst_steps = 0
@@ -290,4 +294,30 @@ if __name__ == "__main__":
         os.environ["TK_LIBRARY"] = os.environ.get(
             "LITTLE_ROACH_TK_LIBRARY", str(bundle_dir / "_tk_data")
         )
-    CockroachPet().run()
+    try:
+        CockroachPet().run()
+    except Exception as exc:
+        import traceback
+
+        details = traceback.format_exc()
+        try:
+            log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LittleRoach"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "startup.log").write_text(details, encoding="utf-8")
+        except OSError:
+            pass
+        # Windowed PyInstaller builds otherwise fail silently. Use the native
+        # Windows dialog so startup errors are visible even if Tk failed.
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                log_path = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LittleRoach" / "startup.log"
+                ctypes.windll.user32.MessageBoxW(
+                    None,
+                    f"Little Roach could not start. Details were saved to:\n{log_path}\n\n{exc}",
+                    APP_NAME,
+                    0x10,
+                )
+            except Exception:
+                pass
+        raise
