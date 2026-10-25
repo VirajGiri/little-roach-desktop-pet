@@ -1,6 +1,6 @@
 import unittest
 
-from pet_core import PetSettings, choose_target
+from pet_core import PetSettings, approach_angle, choose_target, gait_pose, movement_step
 
 
 class FixedRandom:
@@ -32,6 +32,19 @@ class PetCoreTests(unittest.TestCase):
         x, y = choose_target(500, 300, (0, 0, 1920, 1080), 112, 96, 1,
                              FixedRandom([0.1]))
         self.assertEqual((x, y), (0, 0))
+
+    def test_heading_turns_across_zero_by_shortest_arc(self):
+        self.assertAlmostEqual(approach_angle(350, 10, 5), 355)
+        self.assertAlmostEqual(approach_angle(5, 355, 5), 0)
+
+    def test_gait_frames_follow_distance_and_loop(self):
+        self.assertEqual([gait_pose(step * 5) for step in range(16)], list(range(16)))
+        self.assertEqual(gait_pose(80), 0)
+        self.assertEqual(gait_pose(85), 1)
+
+    def test_movement_distance_is_independent_of_frame_interval(self):
+        self.assertAlmostEqual(movement_step(4.0, 0.016), 1.6)
+        self.assertAlmostEqual(movement_step(4.0, 0.04), 4.0)
 
 
 if __name__ == "__main__":

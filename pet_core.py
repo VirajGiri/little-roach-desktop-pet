@@ -43,3 +43,24 @@ def choose_target(x: int, y: int, screen: tuple[int, int, int, int],
         tx = int(min(max_x, max(min_x, x + rng.randint(-max_hop, max_hop))))
         ty = int(min(max_y, max(min_y, y + rng.randint(-max_hop // 2, max_hop // 2))))
     return tx, ty
+
+
+def approach_angle(current: float, target: float, max_step: float) -> float:
+    """Turn toward target by at most max_step degrees along the short arc."""
+    difference = (target - current + 180.0) % 360.0 - 180.0
+    step = min(max_step, max(-max_step, difference))
+    return (current + step) % 360.0
+
+
+def gait_pose(distance: float, frame_count: int = 16,
+              stride_distance: float = 80.0) -> int:
+    """Select a leg-cycle frame from traveled distance, independent of FPS."""
+    if frame_count < 1 or stride_distance <= 0:
+        raise ValueError("frame_count and stride_distance must be positive")
+    phase = (distance % stride_distance) / stride_distance
+    return int(phase * frame_count) % frame_count
+
+
+def movement_step(speed_per_40ms: float, elapsed_seconds: float) -> float:
+    """Convert the legacy pace setting to distance for a variable-length frame."""
+    return max(0.0, speed_per_40ms) * max(0.0, elapsed_seconds) / 0.04

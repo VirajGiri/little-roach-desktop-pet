@@ -7,12 +7,21 @@ import math
 import os
 import random
 import sys
+import time
 import tkinter as tk
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from pet_core import PetSettings, choose_target, settings_path
+from pet_core import (
+    PetSettings,
+    approach_angle,
+    choose_target,
+    gait_pose,
+    movement_step,
+    settings_path,
+)
 
 try:
     import winreg
@@ -23,8 +32,11 @@ except ImportError:  # pragma: no cover - Windows-only integration
 KEY_COLOR = "#010203"
 PET_W, PET_H = 192, 192
 SPRITE_SUBSAMPLE = 10
-WALK_FRAMES = 8
-DIRECTION_COUNT = 16
+WALK_FRAMES = 16
+DIRECTION_COUNT = 32
+STRIDE_DISTANCE = 72.0
+FRAME_INTERVAL_MS = 16
+MAX_CACHED_SPRITES = 96
 APP_NAME = "Little Roach"
 
 
@@ -76,22 +88,24 @@ class CockroachPet:
         except tk.TclError:
             # On unusual Windows themes, retain a clean magenta key background.
             pass
-        self.canvas = tk.Canvas(self.root, width=PET_W, height=PET_H, bg=KEY_COLOR,
+        initial_width = int(PET_W * self.settings.scale)
+        initial_height = int(PET_H * self.settings.scale)
+        self.canvas = tk.Canvas(self.root, width=initial_width, height=initial_height, bg=KEY_COLOR,
                                 highlightthickness=0, bd=0)
         self.canvas.pack()
         bundle_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-        asset_dir = bundle_dir / "assets"
-        self.sprite_sources = [
-            [
-                tk.PhotoImage(file=str(asset_dir / f"roach_walk_{frame}_dir_{direction}.png"))
-                for frame in range(WALK_FRAMES)
-            ]
-            for direction in range(DIRECTION_COUNT)
-        ]
-        self.sprite_cache: dict[tuple[int, int, int], tk.PhotoImage] = {}
+        self.asset_dir = bundle_dir / "assets"
+        # Load sprites on demand and keep a small LRU cache. This avoids a long
+        # startup delay and hundreds of megabytes of decoded Tk images.
+        self.sprite_cache: OrderedDict[tuple[int, int, int], tk.PhotoImage] = OrderedDict()
+        self.sprite_item: int | None = None
+        self.current_sprite_key: tuple[int, int, int] | None = None
         self.direction = 0
+        self.direction_angle = 0.0
         start_x, start_y = self._start_x(), self._start_y()
-        self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), start_x, start_y))
+        self.position_x, self.position_y = float(start_x), float(start_y)
+        self.window_position = (start_x, start_y)
+        self.root.geometry(self._geometry(initial_width, initial_height, start_x, start_y))
         # Keep the entire drawing visible even if the window manager reports a
         # smaller default size for this borderless top-level window.
         self.root.minsize(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale))
@@ -116,13 +130,14 @@ class CockroachPet:
         # initial target tied to the explicit geometry so the first crawl
         # starts where the pet was placed instead of darting to the corner.
         self.target = (start_x, start_y)
-        self.rest_until: int | None = None
-        self.move_speed = self.settings.speed * 2.2
-        self.burst_steps = 0
+        self.rest_until: float | None = None
+        self.move_speed = self.settings.speed * 2.6
+        self.burst_until: float | None = None
         self.moving = False
         self.gait_distance = 0.0
         self.frame = 0
-        self.root.after(40, self._tick)
+        self.last_tick = time.perf_counter()
+        self.root.after(FRAME_INTERVAL_MS, self._tick)
 
     def _start_x(self) -> int:
         if sys.platform == "win32":
@@ -161,6 +176,8 @@ class CockroachPet:
         self.dragging = True
         x, y = event.x_root - self.drag_offset[0], event.y_root - self.drag_offset[1]
         self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), x, y))
+        self.position_x, self.position_y = float(x), float(y)
+        self.window_position = (x, y)
         self.target = (x, y)
 
     def _release(self, _event: tk.Event) -> None:
@@ -175,13 +192,13 @@ class CockroachPet:
         self.menu.entryconfigure(2, label="Resume wandering" if self.paused else "Pause wandering")
 
     def _startle(self, _event: tk.Event | None = None) -> None:
-        x, y = self.root.winfo_x(), self.root.winfo_y()
+        x, y = round(self.position_x), round(self.position_y)
         self.target = choose_target(
             x, y, self._virtual_screen(), int(PET_W*self.settings.scale),
             int(PET_H*self.settings.scale), self.settings.speed * 2.2, random,
         )
         self.move_speed = self.settings.speed * random.uniform(4.5, 6.0)
-        self.burst_steps = random.randint(18, 30)
+        self.burst_until = time.perf_counter() + random.uniform(0.72, 1.2)
         self.rest_until = None
         self.moving = True
 
@@ -215,7 +232,11 @@ class CockroachPet:
                 save_settings(self.settings)
                 width, height = int(PET_W*self.settings.scale), int(PET_H*self.settings.scale)
                 self.root.minsize(width, height)
-                self.root.geometry(self._geometry(width, height, self.root.winfo_x(), self.root.winfo_y()))
+                self.canvas.configure(width=width, height=height)
+                x, y = self.root.winfo_x(), self.root.winfo_y()
+                self.position_x, self.position_y = float(x), float(y)
+                self.window_position = (x, y)
+                self.root.geometry(self._geometry(width, height, x, y))
                 win.destroy()
             except OSError as exc:
                 messagebox.showerror("Could not save settings", str(exc), parent=win)
@@ -224,61 +245,86 @@ class CockroachPet:
 
     def _draw(self) -> None:
         c = self.canvas
-        c.delete("all")
         s = self.settings.scale
-        c.configure(width=int(PET_W*s), height=int(PET_H*s))
         zoom = max(1, round(s * SPRITE_SUBSAMPLE))
-        pose = (int(self.gait_distance / 10.0) % WALK_FRAMES) if self.moving else 0
+        pose = gait_pose(self.gait_distance, WALK_FRAMES, STRIDE_DISTANCE) if self.moving else 0
         key = (self.direction, pose, zoom)
         sprite = self.sprite_cache.get(key)
         if sprite is None:
-            sprite = self.sprite_sources[self.direction][pose].zoom(zoom, zoom).subsample(
-                SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE
+            source = tk.PhotoImage(
+                file=str(self.asset_dir / f"roach_walk_{pose}_dir_{self.direction}.png")
             )
+            sprite = source.zoom(zoom, zoom).subsample(SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE)
             self.sprite_cache[key] = sprite
+            if len(self.sprite_cache) > MAX_CACHED_SPRITES:
+                self.sprite_cache.popitem(last=False)
+        else:
+            self.sprite_cache.move_to_end(key)
         bob = (
-            math.sin(self.gait_distance * (2 * math.pi / (WALK_FRAMES * 10.0))) * 1.4
-            if self.moving else math.sin(self.frame * 0.22) * 0.35
+            math.sin(self.gait_distance * (2 * math.pi / STRIDE_DISTANCE)) * 1.7
+            if self.moving else math.sin(self.frame * 0.04) * 0.55
         )
-        c.create_image(int(PET_W*s)/2, int(PET_H*s)/2 + bob, image=sprite)
+        position = (int(PET_W*s)/2, int(PET_H*s)/2 + bob)
+        if self.sprite_item is None:
+            self.sprite_item = c.create_image(*position, image=sprite)
+            self.current_sprite_key = key
+        else:
+            c.coords(self.sprite_item, *position)
+            if self.current_sprite_key != key:
+                c.itemconfigure(self.sprite_item, image=sprite)
+                self.current_sprite_key = key
 
     def _tick(self) -> None:
+        now = time.perf_counter()
+        dt = max(1.0 / 240.0, min(now - self.last_tick, 0.08))
+        self.last_tick = now
         self.frame += 1
         if not self.paused and not self.dragging:
-            x, y = self.root.winfo_x(), self.root.winfo_y()
+            x, y = self.position_x, self.position_y
             dx, dy = self.target[0]-x, self.target[1]-y
             distance = math.hypot(dx, dy)
             if self.rest_until is not None:
                 self.moving = False
-                if self.frame >= self.rest_until:
+                if now >= self.rest_until:
                     self.target = choose_target(
-                        x, y, self._virtual_screen(), int(PET_W*self.settings.scale),
+                        round(x), round(y), self._virtual_screen(), int(PET_W*self.settings.scale),
                         int(PET_H*self.settings.scale), self.settings.speed, random,
                     )
                     self.rest_until = None
                     if random.random() < 0.24:
-                        self.burst_steps = random.randint(8, 17)
-                        self.move_speed = self.settings.speed * random.uniform(2.8, 4.2)
+                        self.burst_until = now + random.uniform(0.32, 0.68)
+                        self.move_speed = self.settings.speed * random.uniform(3.0, 4.5)
                     else:
-                        self.burst_steps = 0
-                        self.move_speed = self.settings.speed * random.uniform(1.8, 2.6)
+                        self.burst_until = None
+                        self.move_speed = self.settings.speed * random.uniform(2.1, 3.0)
                     self.moving = True
             elif distance < 7:
                 self.moving = False
-                self.rest_until = self.frame + random.randint(18, 56)
+                self.rest_until = now + random.uniform(0.72, 2.24)
+                self.burst_until = None
             else:
                 self.moving = True
-                angle = math.degrees(math.atan2(dy, dx)) % 360.0
-                self.direction = int(round(angle / (360.0 / DIRECTION_COUNT))) % DIRECTION_COUNT
-                step = min(distance, max(1.0, self.move_speed))
+                desired = math.degrees(math.atan2(dy, dx)) % 360.0
+                self.direction_angle = approach_angle(
+                    self.direction_angle, desired, 540.0 * dt
+                )
+                self.direction = int(round(self.direction_angle / (360.0 / DIRECTION_COUNT))) % DIRECTION_COUNT
+                if self.burst_until is not None and now >= self.burst_until:
+                    self.burst_until = None
+                    self.move_speed = self.settings.speed * random.uniform(2.1, 3.0)
+                step = min(distance, movement_step(self.move_speed, dt))
+                self.position_x = x + dx / distance * step
+                self.position_y = y + dy / distance * step
                 self.gait_distance += step
-                self.root.geometry(self._geometry(int(PET_W*self.settings.scale), int(PET_H*self.settings.scale), int(x+dx/distance*step), int(y+dy/distance*step)))
-                if self.burst_steps > 0:
-                    self.burst_steps -= 1
-                    if self.burst_steps == 0:
-                        self.move_speed = self.settings.speed * random.uniform(1.8, 2.6)
+                next_window_position = (round(self.position_x), round(self.position_y))
+                if next_window_position != self.window_position:
+                    self.root.geometry(self._geometry(
+                        int(PET_W*self.settings.scale), int(PET_H*self.settings.scale),
+                        *next_window_position,
+                    ))
+                    self.window_position = next_window_position
         self._draw()
-        self.root.after(40, self._tick)
+        self.root.after(FRAME_INTERVAL_MS, self._tick)
 
     def run(self) -> None:
         self.root.mainloop()
