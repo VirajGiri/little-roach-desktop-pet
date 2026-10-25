@@ -12,13 +12,13 @@ from typing import Any
 @dataclass
 class PetSettings:
     speed: float = 1.0
-    scale: float = 1.0
+    scale: float = 1.4
     start_with_windows: bool = False
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "PetSettings":
         speed = min(2.4, max(0.4, float(values.get("speed", 1.0))))
-        scale = min(1.6, max(0.7, float(values.get("scale", 1.0))))
+        scale = min(1.6, max(0.7, float(values.get("scale", 1.4))))
         return cls(speed, scale, bool(values.get("start_with_windows", False)))
 
 
