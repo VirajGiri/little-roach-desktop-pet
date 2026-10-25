@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import random
 from dataclasses import dataclass
@@ -64,3 +65,27 @@ def gait_pose(distance: float, frame_count: int = 16,
 def movement_step(speed_per_40ms: float, elapsed_seconds: float) -> float:
     """Convert the legacy pace setting to distance for a variable-length frame."""
     return max(0.0, speed_per_40ms) * max(0.0, elapsed_seconds) / 0.04
+
+
+def forward_crawl_step(dx: float, dy: float, heading_degrees: float,
+                       max_distance: float, turn_tolerance: float = 48.0
+                       ) -> tuple[float, float, bool]:
+    """Move forward along the body heading, or stay still while turning.
+
+    The projected target distance prevents sideways sliding and avoids stepping
+    past a nearby destination while the body follows a curved path.
+    """
+    distance = (dx * dx + dy * dy) ** 0.5
+    if distance <= 0.0 or max_distance <= 0.0:
+        return 0.0, 0.0, False
+    desired = math.degrees(math.atan2(dy, dx))
+    error = (desired - heading_degrees + 180.0) % 360.0 - 180.0
+    if abs(error) > turn_tolerance:
+        return 0.0, 0.0, False
+    radians = math.radians(heading_degrees)
+    forward_x, forward_y = math.cos(radians), math.sin(radians)
+    projected = dx * forward_x + dy * forward_y
+    if projected <= 0.0:
+        return 0.0, 0.0, False
+    step = min(distance, projected, max_distance)
+    return forward_x * step, forward_y * step, True

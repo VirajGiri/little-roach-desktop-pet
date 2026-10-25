@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -18,6 +19,7 @@ from pet_core import (
     PetSettings,
     approach_angle,
     choose_target,
+    forward_crawl_step,
     gait_pose,
     movement_step,
     settings_path,
@@ -134,6 +136,7 @@ class CockroachPet:
         self.move_speed = self.settings.speed * 2.6
         self.burst_until: float | None = None
         self.moving = False
+        self.turning = False
         self.gait_distance = 0.0
         self.frame = 0
         self.last_tick = time.perf_counter()
@@ -201,6 +204,7 @@ class CockroachPet:
         self.burst_until = time.perf_counter() + random.uniform(0.72, 1.2)
         self.rest_until = None
         self.moving = True
+        self.turning = False
 
     def _open_settings(self) -> None:
         if getattr(self, "settings_window", None) and self.settings_window.winfo_exists():
@@ -247,13 +251,14 @@ class CockroachPet:
         c = self.canvas
         s = self.settings.scale
         zoom = max(1, round(s * SPRITE_SUBSAMPLE))
-        pose = gait_pose(self.gait_distance, WALK_FRAMES, STRIDE_DISTANCE) if self.moving else 0
+        pose = gait_pose(self.gait_distance, WALK_FRAMES, STRIDE_DISTANCE) if (self.moving or self.turning) else 0
         key = (self.direction, pose, zoom)
         sprite = self.sprite_cache.get(key)
         if sprite is None:
-            source = tk.PhotoImage(
-                file=str(self.asset_dir / f"roach_walk_{pose}_dir_{self.direction}.png")
-            )
+            # Read with Python and pass PNG data to Tk. This avoids Tcl's
+            # Windows path handling for app folders under user profiles.
+            sprite_path = self.asset_dir / f"roach_walk_{pose}_dir_{self.direction}.png"
+            source = tk.PhotoImage(data=base64.b64encode(sprite_path.read_bytes()))
             sprite = source.zoom(zoom, zoom).subsample(SPRITE_SUBSAMPLE, SPRITE_SUBSAMPLE)
             self.sprite_cache[key] = sprite
             if len(self.sprite_cache) > MAX_CACHED_SPRITES:
@@ -262,7 +267,7 @@ class CockroachPet:
             self.sprite_cache.move_to_end(key)
         bob = (
             math.sin(self.gait_distance * (2 * math.pi / STRIDE_DISTANCE)) * 1.7
-            if self.moving else math.sin(self.frame * 0.04) * 0.55
+            if self.moving or self.turning else math.sin(self.frame * 0.04) * 0.55
         )
         position = (int(PET_W*s)/2, int(PET_H*s)/2 + bob)
         if self.sprite_item is None:
@@ -285,6 +290,7 @@ class CockroachPet:
             distance = math.hypot(dx, dy)
             if self.rest_until is not None:
                 self.moving = False
+                self.turning = False
                 if now >= self.rest_until:
                     self.target = choose_target(
                         round(x), round(y), self._virtual_screen(), int(PET_W*self.settings.scale),
@@ -300,22 +306,35 @@ class CockroachPet:
                     self.moving = True
             elif distance < 7:
                 self.moving = False
+                self.turning = False
                 self.rest_until = now + random.uniform(0.72, 2.24)
                 self.burst_until = None
             else:
-                self.moving = True
                 desired = math.degrees(math.atan2(dy, dx)) % 360.0
+                # Turn first, then let the body advance only along its heading.
+                previous_angle = self.direction_angle
                 self.direction_angle = approach_angle(
-                    self.direction_angle, desired, 540.0 * dt
+                    self.direction_angle, desired, 240.0 * dt
                 )
+                turn_step = (self.direction_angle - previous_angle + 180.0) % 360.0 - 180.0
                 self.direction = int(round(self.direction_angle / (360.0 / DIRECTION_COUNT))) % DIRECTION_COUNT
                 if self.burst_until is not None and now >= self.burst_until:
                     self.burst_until = None
                     self.move_speed = self.settings.speed * random.uniform(2.1, 3.0)
-                step = min(distance, movement_step(self.move_speed, dt))
-                self.position_x = x + dx / distance * step
-                self.position_y = y + dy / distance * step
-                self.gait_distance += step
+                step_x, step_y, self.moving = forward_crawl_step(
+                    dx, dy, self.direction_angle,
+                    movement_step(self.move_speed, dt),
+                )
+                self.turning = not self.moving and abs(turn_step) > 0.01
+                if self.turning:
+                    # Let the legs step during a pivot rather than rotating a
+                    # frozen insect; the small cycle is tied to turn angle.
+                    self.gait_distance += abs(turn_step) * 0.28
+                step = math.hypot(step_x, step_y)
+                if step > 0.0:
+                    self.position_x = x + step_x
+                    self.position_y = y + step_y
+                    self.gait_distance += step
                 next_window_position = (round(self.position_x), round(self.position_y))
                 if next_window_position != self.window_position:
                     self.root.geometry(self._geometry(

@@ -1,6 +1,7 @@
 import unittest
 
-from pet_core import PetSettings, approach_angle, choose_target, gait_pose, movement_step
+from pet_core import (PetSettings, approach_angle, choose_target, forward_crawl_step,
+                      gait_pose, movement_step)
 
 
 class FixedRandom:
@@ -45,6 +46,19 @@ class PetCoreTests(unittest.TestCase):
     def test_movement_distance_is_independent_of_frame_interval(self):
         self.assertAlmostEqual(movement_step(4.0, 0.016), 1.6)
         self.assertAlmostEqual(movement_step(4.0, 0.04), 4.0)
+
+    def test_roach_turns_in_place_before_moving_forward(self):
+        self.assertEqual(forward_crawl_step(0, 20, 0, 3), (0.0, 0.0, False))
+        dx, dy, moving = forward_crawl_step(20, 0, 0, 3)
+        self.assertTrue(moving)
+        self.assertAlmostEqual(dx, 3)
+        self.assertAlmostEqual(dy, 0)
+
+    def test_crawl_step_follows_heading_without_sideways_sliding(self):
+        dx, dy, moving = forward_crawl_step(100, 100, 45, 4)
+        self.assertTrue(moving)
+        self.assertAlmostEqual(dx, dy)
+        self.assertAlmostEqual((dx * dx + dy * dy) ** 0.5, 4)
 
 
 if __name__ == "__main__":
