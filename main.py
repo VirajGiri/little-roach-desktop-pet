@@ -66,6 +66,7 @@ def set_startup(enabled: bool) -> None:
 class CockroachPet:
     def __init__(self) -> None:
         self.root = tk.Tk()
+        self.root.title(APP_NAME)
         self.settings = load_settings()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
