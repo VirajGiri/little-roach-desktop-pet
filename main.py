@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - Windows-only integration
 KEY_COLOR = "#010203"
 PET_W, PET_H = 192, 192
 SPRITE_SUBSAMPLE = 10
-WALK_FRAMES = 16
+WALK_FRAMES = 8
 DIRECTION_COUNT = 32
 STRIDE_DISTANCE = 72.0
 FRAME_INTERVAL_MS = 16
